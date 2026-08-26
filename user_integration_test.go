@@ -6,9 +6,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log/slog"
+	"net"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
@@ -16,10 +15,10 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/testcontainers/testcontainers-go"
 	tcmysql "github.com/testcontainers/testcontainers-go/modules/mysql"
+	"go.uber.org/fx"
+	"go.uber.org/fx/fxtest"
 )
 
-// startMySQLContainer spins up a real MySQL instance in Docker and returns
-// a DSN plus a cleanup func.
 func startMySQLContainer(t *testing.T) (dsn string, cleanup func()) {
 	t.Helper()
 	ctx := context.Background()
@@ -49,7 +48,6 @@ func startMySQLContainer(t *testing.T) (dsn string, cleanup func()) {
 	return connStr, cleanup
 }
 
-// applySchema runs schema.sql against the DB so the users table exists.
 func applySchema(t *testing.T, db *sql.DB) {
 	t.Helper()
 	schema, err := os.ReadFile("schema.sql")
@@ -61,6 +59,20 @@ func applySchema(t *testing.T, db *sql.DB) {
 	}
 }
 
+func waitForReady(t *testing.T, db *sql.DB) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if err := db.Ping(); err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("mysql did not become ready in time")
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
 func TestUserCreateAndGet_Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -69,41 +81,53 @@ func TestUserCreateAndGet_Integration(t *testing.T) {
 	dsn, cleanup := startMySQLContainer(t)
 	defer cleanup()
 
-	// Connect directly to run migrations before building the app.
 	setupDB, err := sql.Open("mysql", dsn)
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
 	defer setupDB.Close()
 
-	// Wait for MySQL to actually be ready to accept connections.
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		if err := setupDB.Ping(); err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("mysql did not become ready in time: %v", err)
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-
+	waitForReady(t, setupDB)
 	applySchema(t, setupDB)
 
-	// Build the real app components directly (no fx.Invoke of the actual
-	// HTTP listener — we just want the mux, tested via httptest).
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	repo := NewUserRepository(setupDB)
-	mux := NewMux(repo)
+	// Test config: fixed DSN from the container, port 0 so the OS
+	// picks a free port (avoids clashing with anything else running).
+	cfg := &Config{
+		Port:              "0",
+		DSN:               dsn,
+		ReadTimeout:       5 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
 
-	server := httptest.NewServer(mux)
-	defer server.Close()
+	var listener net.Listener
+
+	app := fxtest.New(
+		t,
+		fx.Supply(cfg), // overrides NewConfig — no NewConfig in this list
+		fx.Provide(
+			NewLogger,
+			NewDB,
+			NewUserRepository,
+			NewMux,
+			NewListener,
+			NewHTTPServer,
+		),
+		fx.Populate(&listener), // pulls the constructed net.Listener out of the graph
+		fx.Invoke(func(*http.Server) {}),
+	)
+
+	app.RequireStart()
+	defer app.RequireStop()
+
+	baseURL := fmt.Sprintf("http://%s", listener.Addr().String())
 
 	// --- POST /users ---
 	newUser := User{ID: "u1", Name: "Ada Lovelace"}
 	body, _ := json.Marshal(newUser)
 
-	resp, err := http.Post(server.URL+"/users", "application/json", bytes.NewReader(body))
+	resp, err := http.Post(baseURL+"/users", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("POST /users failed: %v", err)
 	}
@@ -114,7 +138,7 @@ func TestUserCreateAndGet_Integration(t *testing.T) {
 	}
 
 	// --- GET /users/{id} ---
-	getResp, err := http.Get(fmt.Sprintf("%s/users/%s", server.URL, newUser.ID))
+	getResp, err := http.Get(fmt.Sprintf("%s/users/%s", baseURL, newUser.ID))
 	if err != nil {
 		t.Fatalf("GET /users/%s failed: %v", newUser.ID, err)
 	}
@@ -132,6 +156,4 @@ func TestUserCreateAndGet_Integration(t *testing.T) {
 	if got.ID != newUser.ID || got.Name != newUser.Name {
 		t.Fatalf("expected %+v, got %+v", newUser, got)
 	}
-
-	logger.Info("integration test passed", "user", got)
 }

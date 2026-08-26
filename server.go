@@ -10,20 +10,22 @@ import (
 	"go.uber.org/fx"
 )
 
-func newHTTPServer(lc fx.Lifecycle, mux *http.ServeMux, cfg *Config, logger *slog.Logger) *http.Server {
+func NewListener(cfg *Config) (net.Listener, error) {
+	return net.Listen("tcp", ":"+cfg.Port)
+}
+
+func NewHTTPServer(lc fx.Lifecycle, ln net.Listener, mux *http.ServeMux, cfg *Config, logger *slog.Logger) *http.Server {
 	srv := &http.Server{
-		Addr:    ":" + cfg.Port,
-		Handler: mux,
+		Handler:           mux,
+		ReadTimeout:       cfg.ReadTimeout,
+		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
+		WriteTimeout:      cfg.WriteTimeout,
+		IdleTimeout:       cfg.IdleTimeout,
 	}
 
 	lc.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
-			ln, err := net.Listen("tcp", srv.Addr)
-			if err != nil {
-				return err
-			}
-
-			logger.Info("Starting server", "addr", srv.Addr)
+			logger.Info("Starting server", "addr", ln.Addr().String())
 			go srv.Serve(ln)
 			return nil
 		},

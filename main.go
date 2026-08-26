@@ -15,7 +15,8 @@ func main() {
 			NewDB,
 			NewUserRepository,
 			NewMux,
-			newHTTPServer,
+			NewListener,
+			NewHTTPServer,
 		),
 		// start up new http server which is returned by newHTTPServer
 		fx.Invoke(func(*http.Server) {}),
