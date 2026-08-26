@@ -12,6 +12,8 @@ func main() {
 		fx.Provide(
 			NewConfig,
 			NewLogger,
+			NewDB,
+			NewUserRepository,
 			NewMux,
 			newHTTPServer,
 		),
