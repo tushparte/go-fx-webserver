@@ -12,6 +12,12 @@ import (
 	"testing"
 	"time"
 
+	"go-fx-webserver/internal/config"
+	"go-fx-webserver/internal/db"
+	"go-fx-webserver/internal/httpserver"
+	"go-fx-webserver/internal/logger"
+	"go-fx-webserver/internal/user"
+
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/testcontainers/testcontainers-go"
 	tcmysql "github.com/testcontainers/testcontainers-go/modules/mysql"
@@ -50,7 +56,7 @@ func startMySQLContainer(t *testing.T) (dsn string, cleanup func()) {
 
 func applySchema(t *testing.T, db *sql.DB) {
 	t.Helper()
-	schema, err := os.ReadFile("schema.sql")
+	schema, err := os.ReadFile("../../schema.sql")
 	if err != nil {
 		t.Fatalf("failed to read schema.sql: %v", err)
 	}
@@ -92,7 +98,7 @@ func TestUserCreateAndGet_Integration(t *testing.T) {
 
 	// Test config: fixed DSN from the container, port 0 so the OS
 	// picks a free port (avoids clashing with anything else running).
-	cfg := &Config{
+	cfg := &config.Config{
 		Port:              "0",
 		DSN:               dsn,
 		ReadTimeout:       5 * time.Second,
@@ -106,14 +112,10 @@ func TestUserCreateAndGet_Integration(t *testing.T) {
 	app := fxtest.New(
 		t,
 		fx.Supply(cfg), // overrides NewConfig — no NewConfig in this list
-		fx.Provide(
-			NewLogger,
-			NewDB,
-			NewUserRepository,
-			NewMux,
-			NewListener,
-			NewHTTPServer,
-		),
+		logger.Module,
+		db.Module,
+		user.Module,
+		httpserver.Module,
 		fx.Populate(&listener), // pulls the constructed net.Listener out of the graph
 		fx.Invoke(func(*http.Server) {}),
 	)
@@ -124,7 +126,7 @@ func TestUserCreateAndGet_Integration(t *testing.T) {
 	baseURL := fmt.Sprintf("http://%s", listener.Addr().String())
 
 	// --- POST /users ---
-	newUser := User{ID: "u1", Name: "Ada Lovelace"}
+	newUser := user.User{ID: "u1", Name: "Ada Lovelace"}
 	body, _ := json.Marshal(newUser)
 
 	resp, err := http.Post(baseURL+"/users", "application/json", bytes.NewReader(body))
@@ -148,7 +150,7 @@ func TestUserCreateAndGet_Integration(t *testing.T) {
 		t.Fatalf("expected 200, got %d", getResp.StatusCode)
 	}
 
-	var got User
+	var got user.User
 	if err := json.NewDecoder(getResp.Body).Decode(&got); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
