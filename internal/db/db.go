@@ -1,4 +1,4 @@
-package main
+package db
 
 import (
 	"context"
@@ -6,11 +6,13 @@ import (
 	"log/slog"
 	"time"
 
+	"go-fx-webserver/internal/config"
+
 	_ "github.com/go-sql-driver/mysql"
 	"go.uber.org/fx"
 )
 
-func NewDB(lc fx.Lifecycle, cfg *Config, logger *slog.Logger) (*sql.DB, error) {
+func NewDB(lc fx.Lifecycle, cfg *config.Config, logger *slog.Logger) (*sql.DB, error) {
 	db, err := sql.Open("mysql", cfg.DSN)
 	if err != nil {
 		return nil, err
