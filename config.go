@@ -25,7 +25,7 @@ func NewConfig() *Config {
 
 	dsn := os.Getenv("MYSQL_DSN")
 	if dsn == "" {
-		dsn = "root:password@tcp(127.0.0.1:3306)/myapp?parseTime=true"
+		dsn = "root:root@tcp(127.0.0.1:3306)/myapp?parseTime=true"
 	}
 
 	return &Config{

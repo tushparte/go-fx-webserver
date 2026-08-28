@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	_ "github.com/go-sql-driver/mysql"
 	"go.uber.org/fx"
 )
 
